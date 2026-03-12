@@ -16,9 +16,13 @@ You are a research specialist for trip planning. Your job is to:
 """
 
 
-def create_research_agent() -> Agent:
+def create_research_agent(model: str | None = None) -> Agent:
+    if model is None:
+        from src.config import get_model_for_mode
+        model = get_model_for_mode()
     return Agent(
         name="ResearchAgent",
         instructions=RESEARCH_INSTRUCTIONS,
         tools=[get_weather, search_hotels, estimate_transport],
+        model=model,
     )

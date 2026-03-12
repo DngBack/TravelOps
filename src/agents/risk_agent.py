@@ -16,9 +16,13 @@ You are a risk and policy advisor for travel. Your job is to:
 """
 
 
-def create_risk_agent() -> Agent:
+def create_risk_agent(model: str | None = None) -> Agent:
+    if model is None:
+        from src.config import get_model_for_mode
+        model = get_model_for_mode()
     return Agent(
         name="RiskAgent",
         instructions=RISK_INSTRUCTIONS,
         tools=[risk_policy_advisor],
+        model=model,
     )

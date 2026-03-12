@@ -8,6 +8,9 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
+from src.logging_config import setup_logging
+setup_logging()
+
 import streamlit as st
 
 # Default prompt for quick testing
@@ -76,6 +79,12 @@ with st.form("run_form"):
         height=120,
         help="Task for the agent (e.g. trip planning Hanoi → Da Nang).",
     )
+    mode = st.selectbox(
+        "Mode",
+        options=["instant", "thinking"],
+        index=0,
+        help="instant = fast model (gpt-4o-mini). thinking = reasoning model (gpt-4.1-nano / gpt-5-nano).",
+    )
     preset = st.selectbox(
         "Scenario preset (for trace filtering)",
         options=list(SCENARIO_PRESETS.keys()),
@@ -94,6 +103,7 @@ if submitted:
         st.error("Set OPENAI_API_KEY in the environment to run the agent.")
         st.stop()
 
+    os.environ["TRAVELOPS_MODE"] = mode
     with st.spinner("Running agent (plan → tools → synthesis)…"):
         try:
             output_text, result = _run_agent(

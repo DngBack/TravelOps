@@ -44,12 +44,18 @@ Use currency_fx only when user needs conversion. You may use web_search to look 
 """
 
 
-def create_orchestrator_agent(use_subagents: bool = True) -> Agent:
+def create_orchestrator_agent(
+    use_subagents: bool = True,
+    model: str | None = None,
+) -> Agent:
     """
-    Create TripOrchestrator with 7 tools. If use_subagents=True (M3), add ResearchAgent and RiskAgent as tools.
+    Create TripOrchestrator. model: tên model (instant vs thinking); None = lấy từ config.
     """
-    research = create_research_agent()
-    risk = create_risk_agent()
+    if model is None:
+        from src.config import get_model_for_mode
+        model = get_model_for_mode()
+    research = create_research_agent(model=model)
+    risk = create_risk_agent(model=model)
 
     tools = [
         get_weather,
@@ -77,4 +83,5 @@ def create_orchestrator_agent(use_subagents: bool = True) -> Agent:
         name="TripOrchestrator",
         instructions=ORCHESTRATOR_INSTRUCTIONS,
         tools=tools,
+        model=model,
     )

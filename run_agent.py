@@ -8,6 +8,8 @@ import sys
 from dotenv import load_dotenv
 load_dotenv()
 
+from src.config import get_mode, get_model_for_mode
+from src.logging_config import setup_logging, get_logger, TravelOpsRunHooks
 from src.tracing.langfuse_setup import setup_tracing, get_trace_metadata
 from src.agents.orchestrator import create_orchestrator_agent
 
@@ -30,7 +32,13 @@ async def run_async(
     Run the TravelOps agent. Returns final_output str by default.
     If return_result=True, returns (final_output, result) for UI to show new_items/steps.
     """
+    setup_logging()
     setup_tracing()
+    log = get_logger()
+    mode = get_mode()
+    model = get_model_for_mode(mode)
+    log.info("run_start | mode=%s | model=%s | scenario_id=%s | test_case_id=%s", mode, model, scenario_id or "-", test_case_id or "-")
+    log.info("input | %s", user_input[:500] + "..." if len(user_input) > 500 else user_input)
 
     try:
         from agents import Runner
@@ -49,7 +57,7 @@ async def run_async(
         get_client = None
         propagate_attributes = None
 
-    agent = create_orchestrator_agent(use_subagents=True)
+    agent = create_orchestrator_agent(use_subagents=True, model=model)
 
     if Runner is None:
         if return_result:
@@ -61,15 +69,17 @@ async def run_async(
         test_case_id=test_case_id or os.environ.get("TEST_CASE_ID", ""),
     )
 
+    hooks = TravelOpsRunHooks()
+    run_kwargs = {"hooks": hooks}
     if trace is not None:
         with trace("workflow: travel_ops_agent"):
             if propagate_attributes is not None:
                 with propagate_attributes(metadata=metadata):
-                    result = await Runner.run(agent, user_input)
+                    result = await Runner.run(agent, user_input, **run_kwargs)
             else:
-                result = await Runner.run(agent, user_input)
+                result = await Runner.run(agent, user_input, **run_kwargs)
     else:
-        result = await Runner.run(agent, user_input)
+        result = await Runner.run(agent, user_input, **run_kwargs)
 
     try:
         langfuse = get_client()
@@ -77,9 +87,12 @@ async def run_async(
     except Exception:
         pass
 
+    final = result.final_output or ""
+    log.info("run_end | final_output_len=%s", len(final))
+    log.debug("final_output | %s", final[:1000] + "..." if len(final) > 1000 else final)
     if return_result:
-        return result.final_output or "", result
-    return result.final_output or ""
+        return final, result
+    return final
 
 
 def main() -> None:
