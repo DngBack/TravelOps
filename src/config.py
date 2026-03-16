@@ -23,7 +23,7 @@ def get_model_for_mode(mode: str | None = None) -> str:
     if mode == "thinking":
         return (
             os.environ.get("TRAVELOPS_MODEL_THINKING", "").strip()
-            or "gpt-5-nano"
+            or "gpt-5-mini"  # gpt-5-nano may be unavailable; override via env if needed
         )
     return (
         os.environ.get("TRAVELOPS_MODEL_INSTANT", "").strip()

@@ -44,9 +44,9 @@ uv run streamlit run app.py
 | **risk_policy_advisor** | Logic từ weather/budget | — | — |
 | **currency_fx** | [Frankfurter](https://www.frankfurter.app/) | — | Không cần key |
 | **human_approval** | — | — | Luôn "pending" |
-| **web_search** | [DuckDuckGo](https://pypi.org/project/duckduckgo-search/) | — | Không cần key (đã có trong dependencies) |
+| **web_search** | [Browserless](https://www.browserless.io/) (Puppeteer → DuckDuckGo HTML) | — | `BROWSERLESS_API_TOKEN` (free tier: 1000 req/tháng) |
 
-- **Web search:** Chỉ dùng DuckDuckGo (`duckduckgo-search`). Tra thông tin trực tiếp: khách sạn, giá vé, thời tiết. Cài: `pip install duckduckgo-search` hoặc `pip install -e .`.
+- **Web search:** Chỉ dùng Browserless. Token miễn phí tại [browserless.io](https://www.browserless.io/). Dùng cho tool `web_search` và fallback tìm khách sạn khi không có Amadeus/HotelsAPI.
 - **Bật/tắt API thật:** `TRAVELOPS_USE_REAL_API=1` (mặc định) hoặc `=0` để chỉ stub.
 - **Hotels:** Nếu có Amadeus key thì dùng Amadeus; không thì dùng HotelsAPI.com khi set `HOTELS_API_KEY` (đăng ký [hotels-api.com](https://hotels-api.com/register.php), 500 req/tháng free).
 - **Flights:** Amadeus trả giá vé; AviationStack chỉ trả routes + duration (không giá), cần [aviationstack.com](https://aviationstack.com/) (routes có trên Basic plan trở lên).

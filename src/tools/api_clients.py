@@ -5,7 +5,7 @@ Real API clients for TravelOps tools.
 - Amadeus: flights + hotels (AMADEUS_CLIENT_ID, AMADEUS_CLIENT_SECRET)
 - HotelsAPI.com: hotels by city (HOTELS_API_KEY) — alternative to Amadeus
 - AviationStack: flight routes (AVIATIONSTACK_ACCESS_KEY) — no prices
-- DuckDuckGo: web search (duckduckgo-search, no key)
+- Browserless: web search only (BROWSERLESS_API_TOKEN) — scrapes DuckDuckGo HTML
 """
 import os
 import re
@@ -403,31 +403,102 @@ def aviationstack_routes(
         return None
 
 
-# --- Web search (DuckDuckGo only, no key) ---
-def duckduckgo_search(query: str, num: int = 5) -> list[dict[str, str]] | None:
-    """
-    Search the web via DuckDuckGo. No API key. Requires: pip install duckduckgo-search.
-    Returns list of {title, link, snippet}.
-    """
+# --- Web search (Browserless only: Puppeteer scrapes DuckDuckGo HTML) ---
+# Free tier often uses production-sfo; override with BROWSERLESS_BASE_URL if needed
+BROWSERLESS_FUNCTION_URL = "https://production-sfo.browserless.io"
+BROWSERLESS_SEARCH_JS = r"""
+export default async ({ page, context }) => {
+  const query = (context && context.query) || '';
+  const numResults = (context && context.numResults) || 5;
+  await page.setExtraHTTPHeaders({ 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0' });
+  const url = 'https://html.duckduckgo.com/html/?q=' + encodeURIComponent(query);
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+  await page.waitForSelector('.result, .results .result', { timeout: 10000 }).catch(() => null);
+  const results = await page.evaluate((max) => {
+    const nodes = document.querySelectorAll('.result, .results .result');
+    const out = [];
+    const isAdOrTracking = (href) => !href || href.includes('duckduckgo.com/y.js') || href.includes('ad_domain') || href.includes('ad_provider') || href.includes('click_metadata');
+    const isRealUrl = (href) => href && href.startsWith('http') && !href.includes('duckduckgo.com/');
+    for (const el of nodes) {
+      if (out.length >= max) break;
+      const a = el.querySelector('a.result__a') || el.querySelector('.result__title a') || el.querySelector('a[class*="result"]');
+      const urlEl = el.querySelector('a.result__url') || a;
+      const snippetEl = el.querySelector('.result__snippet') || el.querySelector('[class*="snippet"]');
+      let title = a ? (a.textContent || '').trim() : '';
+      let link = (urlEl && urlEl.href) ? urlEl.href : (a && a.href) ? a.href : '';
+      if (link && link.includes('duckduckgo.com/l/') && link.includes('uddg=')) {
+        try {
+          const u = new URL(link);
+          const uddg = u.searchParams.get('uddg');
+          if (uddg) link = decodeURIComponent(uddg);
+        } catch (e) {}
+      }
+      if (isAdOrTracking(link) || !isRealUrl(link)) continue;
+      const snippet = snippetEl ? (snippetEl.textContent || '').trim().slice(0, 400) : '';
+      if (title || link) out.push({ title, link, snippet });
+    }
+    return out;
+  }, numResults);
+  return { data: { results: results || [] }, type: 'application/json' };
+};
+"""
+
+
+def _log_web_search_failure(reason: str, detail: str = "") -> None:
     try:
-        from duckduckgo_search import DDGS
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=num))
-        out: list[dict[str, str]] = []
-        for r in results:
-            out.append({
-                "title": (r.get("title") or "").strip(),
-                "link": (r.get("href") or r.get("link") or "").strip(),
-                "snippet": (r.get("body") or "").strip(),
-            })
-        return out if out else None
+        from src.logging_config import get_logger
+        get_logger().warning("web_search (Browserless) | %s %s", reason, detail or "")
     except Exception:
+        pass
+
+
+def browserless_web_search(query: str, num_results: int = 5) -> list[dict[str, str]] | None:
+    """
+    Web search via Browserless (Puppeteer scrapes DuckDuckGo HTML).
+    Requires BROWSERLESS_API_TOKEN. Returns list of {title, link, snippet}.
+    Retries once on empty/timeout to reduce Hotel A/B fallback.
+    """
+    token = (os.environ.get("BROWSERLESS_API_TOKEN") or os.environ.get("BROWSERLESS_TOKEN") or "").strip()
+    if not token:
+        _log_web_search_failure("no token", "Set BROWSERLESS_API_TOKEN in .env")
         return None
+    base = (os.environ.get("BROWSERLESS_BASE_URL") or BROWSERLESS_FUNCTION_URL).rstrip("/")
+    url = f"{base}/function?token={token}"
+    payload = {"code": BROWSERLESS_SEARCH_JS, "context": {"query": query, "numResults": num_results}}
+    timeout_sec = REQUEST_TIMEOUT + 10
+    last_error: str | None = None
+    for attempt in range(2):
+        try:
+            r = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=timeout_sec)
+            r.raise_for_status()
+            data = r.json()
+            results = (data.get("data") or {}).get("results") or []
+            out: list[dict[str, str]] = []
+            for item in results[:num_results]:
+                link = (item.get("link") or "").strip()
+                if not link or "duckduckgo.com/" in link:
+                    continue
+                out.append({
+                    "title": (item.get("title") or "").strip(),
+                    "link": link,
+                    "snippet": (item.get("snippet") or "").strip(),
+                })
+            if out:
+                return out
+            last_error = "empty results"
+        except requests.exceptions.HTTPError as e:
+            last_error = f"HTTP {e.response.status_code if e.response else '?'}"
+        except requests.exceptions.Timeout:
+            last_error = "timeout"
+        except Exception as e:
+            last_error = str(e)[:80]
+    _log_web_search_failure(last_error or "unknown", f"query={query[:50]} (after 2 attempts)")
+    return None
 
 
 def web_search_results(query: str, num_results: int = 5) -> list[dict[str, str]] | None:
     """
-    Run web search via DuckDuckGo only (no API key). Requires: pip install duckduckgo-search.
+    Web search: Browserless only (scrapes DuckDuckGo HTML). Requires BROWSERLESS_API_TOKEN.
     Returns list of {title, link, snippet} or None.
     """
-    return duckduckgo_search(query, num_results)
+    return browserless_web_search(query, num_results)

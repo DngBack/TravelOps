@@ -57,7 +57,32 @@ def get_weather(destination: str, dates: str) -> str:
     return _to_str(out)
 
 
-# --- Tool B: search_hotels (Amadeus or HotelsAPI.com) ---
+# --- Tool B: search_hotels (Amadeus, HotelsAPI.com, or DuckDuckGo web search) ---
+def _search_hotels_web_fallback(destination: str, budget: float) -> SearchHotelsOutput | None:
+    """Fallback: search real hotels via DuckDuckGo when no API keys. Returns None on error."""
+    try:
+        from src.tools.api_clients import web_search_results
+        # Search in Vietnamese and English for better results in Vietnam
+        query = f"khách sạn {destination} hotel"
+        raw = web_search_results(query, num_results=8)
+        if not raw:
+            return None
+        hotels = [
+            HotelItem(
+                name=(r.get("title") or "").strip() or f"Hotel {i+1}",
+                price_per_night=0.0,  # not from search; user checks link
+                rating=0.0,
+                availability=True,
+                link=(r.get("link") or "").strip(),
+                snippet=(r.get("snippet") or "").strip()[:300],
+            )
+            for i, r in enumerate(raw)
+        ]
+        return SearchHotelsOutput(hotels=hotels) if hotels else None
+    except Exception:
+        return None
+
+
 @function_tool
 def search_hotels(
     destination: str,
@@ -67,20 +92,29 @@ def search_hotels(
 ) -> str:
     """
     Search hotels at destination for checkin/checkout dates within budget.
-    Returns list of hotels with name, price_per_night, rating, availability.
-    Uses Amadeus when AMADEUS_CLIENT_ID+SECRET set; else HotelsAPI.com when HOTELS_API_KEY set.
+    Returns list of hotels with name, price_per_night, rating, availability (and link/snippet when from web search).
+    Uses Amadeus when AMADEUS_CLIENT_ID+SECRET set; else HotelsAPI.com when HOTELS_API_KEY set;
+    otherwise uses web search (DuckDuckGo, no key) for real hotel names and links.
     """
+    def _has_real_key(key: str) -> bool:
+        v = (os.environ.get(key) or "").strip()
+        return bool(v) and v not in (".", "..", "...")
+
     if _use_real_api():
-        if os.environ.get("AMADEUS_CLIENT_ID"):
+        if _has_real_key("AMADEUS_CLIENT_ID"):
             from src.tools.api_clients import amadeus_hotel_list
             result = amadeus_hotel_list(destination, budget)
             if result is not None:
                 return _to_str(result)
-        if os.environ.get("HOTELS_API_KEY"):
+        if _has_real_key("HOTELS_API_KEY"):
             from src.tools.api_clients import hotels_api_com_search
             result = hotels_api_com_search(destination, budget)
             if result is not None:
                 return _to_str(result)
+        # No API keys (or placeholders): use Browserless web search for real hotels
+        web_result = _search_hotels_web_fallback(destination, budget)
+        if web_result is not None:
+            return _to_str(web_result)
     out = SearchHotelsOutput(
         hotels=[
             HotelItem(name="Hotel A", price_per_night=500000, rating=4.2, availability=True),
@@ -212,18 +246,21 @@ def human_approval(action: str, payload: str) -> str:
     return _human_approval_impl(action, payload)
 
 
-# --- Tool H: web_search (DuckDuckGo only, no key) ---
+# --- Tool H: web_search (Browserless only) ---
 @function_tool
 def web_search(query: str, num_results: int = 5) -> str:
     """
-    Search the web via DuckDuckGo (no API key). Use for current info: hotels, weather, flight prices, reviews.
+    Search the web via Browserless (Puppeteer scrapes DuckDuckGo HTML). Use for current info: hotels, weather, flight prices, reviews.
     Pass a clear search query (e.g. "hotels in Da Nang Vietnam", "flight Hanoi to Da Nang price").
-    Returns a list of results with title, link, snippet. Requires: pip install duckduckgo-search.
+    Returns a list of results with title, link, snippet. Requires: BROWSERLESS_API_TOKEN in .env.
     """
     if not _use_real_api():
         return json.dumps({"results": [], "message": "Web search disabled (TRAVELOPS_USE_REAL_API=0)."})
     from src.tools.api_clients import web_search_results
     results = web_search_results(query, num_results)
     if not results:
-        return json.dumps({"results": [], "message": "No results. Install duckduckgo-search: pip install duckduckgo-search"})
+        return json.dumps({
+            "results": [],
+            "message": "No results. Set BROWSERLESS_API_TOKEN in .env (get free token at browserless.io).",
+        })
     return json.dumps({"results": results}, ensure_ascii=False)

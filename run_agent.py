@@ -4,9 +4,25 @@ TravelOps Agent entrypoint. Run with tracing (workflow: travel_ops_agent) and op
 import asyncio
 import os
 import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
-load_dotenv()
+
+# Load .env from project root so TRAVELOPS_* and API keys are set regardless of cwd
+_project_root = Path(__file__).resolve().parent
+load_dotenv(_project_root / ".env")
+
+# Fail fast with clear message if openai-agents is not installed
+try:
+    from agents import Runner  # noqa: F401
+except ImportError:
+    print(
+        "Error: Package 'agents' (openai-agents) not found. Install dependencies:\n"
+        "  pip install -r requirements.txt\n"
+        "  # or: pip install openai-agents",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 from src.config import get_mode, get_model_for_mode
 from src.logging_config import setup_logging, get_logger, TravelOpsRunHooks
@@ -41,10 +57,6 @@ async def run_async(
     log.info("input | %s", user_input[:500] + "..." if len(user_input) > 500 else user_input)
 
     try:
-        from agents import Runner
-    except ImportError:
-        Runner = None
-    try:
         from agents.tracing import trace
     except ImportError:
         try:
@@ -58,11 +70,6 @@ async def run_async(
         propagate_attributes = None
 
     agent = create_orchestrator_agent(use_subagents=True, model=model)
-
-    if Runner is None:
-        if return_result:
-            return "", None
-        return "Install openai-agents to run the agent."
 
     metadata = get_trace_metadata(
         scenario_id=scenario_id or os.environ.get("SCENARIO_ID", ""),

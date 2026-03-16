@@ -19,6 +19,8 @@ class HotelItem(BaseModel):
     price_per_night: float
     rating: float
     availability: bool
+    link: str = ""  # URL when from web search
+    snippet: str = ""  # Short description when from web search
 
 
 class SearchHotelsOutput(BaseModel):
