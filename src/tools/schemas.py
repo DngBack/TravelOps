@@ -33,6 +33,9 @@ class TransportOption(BaseModel):
     price_min: float
     price_max: float
     duration_hours: float
+    carrier_or_route_hint: str = ""
+    booking_links: list[str] = Field(default_factory=list)
+    notes: str = ""
 
 
 class EstimateTransportOutput(BaseModel):

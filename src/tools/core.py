@@ -16,8 +16,8 @@ from src.tools.schemas import (
     GetWeatherOutput,
     HumanApprovalOutput,
     RiskPolicyOutput,
-    SearchHotelsOutput,
     HotelItem,
+    SearchHotelsOutput,
     TransportOption,
 )
 
@@ -34,6 +34,35 @@ def _to_str(data: Any) -> str:
 def _use_real_api() -> bool:
     """Use real APIs (no stub) when env requests it."""
     return os.environ.get("TRAVELOPS_USE_REAL_API", "1").strip().lower() in ("1", "true", "yes")
+
+
+def _annotate_transport_options(
+    origin: str,
+    destination: str,
+    dates: str,
+    options: list[TransportOption],
+) -> list[TransportOption]:
+    """Gắn booking_links + ghi chú cho từng phương án (máy bay / tàu / xe)."""
+    from src.tools.api_clients import deep_links_transport
+
+    dl = deep_links_transport(origin, destination, dates)
+    out: list[TransportOption] = []
+    for o in options:
+        mode = (o.mode or "").lower()
+        if "flight" in mode or mode in ("plane", "air"):
+            links = list(dl.get("flight") or [])
+            note = o.notes or "Giá trong tool là tham khảo; mở link (Skyscanner / hãng) để xem giá & giờ thực tế."
+        elif "train" in mode or "tàu" in mode or "tau" in mode:
+            links = list(dl.get("train") or [])
+            note = o.notes or "Vé tàu: tra cứu trên DSĐV hoặc đại lý; giá tham khảo."
+        elif "bus" in mode or "xe" in mode:
+            links = list(dl.get("bus") or [])
+            note = o.notes or "Xe khách: tra cứu nhà xe & lịch chạy."
+        else:
+            links = list(dict.fromkeys((dl.get("flight") or []) + (dl.get("train") or [])))
+            note = o.notes or ""
+        out.append(o.model_copy(update={"booking_links": links, "notes": note.strip()}))
+    return out
 
 
 # --- Tool A: get_weather (Open-Meteo, no key) ---
@@ -59,24 +88,43 @@ def get_weather(destination: str, dates: str) -> str:
 
 # --- Tool B: search_hotels (Amadeus, HotelsAPI.com, or Tavily web search) ---
 def _search_hotels_web_fallback(destination: str, budget: float) -> SearchHotelsOutput | None:
-    """Fallback: search real hotels via Tavily when no API keys. Returns None on error."""
+    """Nhiều truy vấn Tavily + trích tên khách sạn từ snippet (không chỉ link tổng hợp)."""
     try:
         from src.tools.api_clients import web_search_results
-        # Search in Vietnamese and English for better results in Vietnam
-        query = f"khách sạn {destination} hotel"
-        raw = web_search_results(query, num_results=8)
+        from src.tools.hotel_enrich import merge_hotel_web_results
+
+        dest_short = (destination or "").split(",")[0].strip() or destination
+        queries = [
+            f"khách sạn {dest_short} tên khách sạn review đặt phòng",
+            f"best hotels {dest_short} Vietnam tên cụ thể TripAdvisor",
+            f"{dest_short} resort spa 5 sao tên khách sạn",
+        ]
+        raw: list[dict[str, Any]] = []
+        seen_url: set[str] = set()
+        for q in queries:
+            part = web_search_results(q, num_results=6, search_depth="advanced") or []
+            if not part:
+                part = web_search_results(q, num_results=6, search_depth="basic") or []
+            for r in part:
+                u = (r.get("link") or "").strip()
+                if u and u not in seen_url:
+                    seen_url.add(u)
+                    raw.append(r)
         if not raw:
+            return None
+        merged = merge_hotel_web_results(raw)
+        if not merged:
             return None
         hotels = [
             HotelItem(
-                name=(r.get("title") or "").strip() or f"Hotel {i+1}",
-                price_per_night=0.0,  # not from search; user checks link
+                name=(row.get("name") or "Hotel")[:200],
+                price_per_night=0.0,
                 rating=0.0,
                 availability=True,
-                link=(r.get("link") or "").strip(),
-                snippet=(r.get("snippet") or "").strip()[:300],
+                link=(row.get("link") or "").strip(),
+                snippet=(row.get("snippet") or "")[:400],
             )
-            for i, r in enumerate(raw)
+            for row in merged[:14]
         ]
         return SearchHotelsOutput(hotels=hotels) if hotels else None
     except Exception:
@@ -93,6 +141,7 @@ def search_hotels(
     """
     Search hotels at destination for checkin/checkout dates within budget.
     Returns list of hotels with name, price_per_night, rating, availability (and link/snippet when from web search).
+    **budget**: mức gợi ý **VND/đêm** (ví dụ 1_500_000). Tránh số quá nhỏ (vd. 100) trừ khi user yêu cầu hostel.
     Uses Amadeus when AMADEUS_CLIENT_ID+SECRET set; else HotelsAPI.com when HOTELS_API_KEY set;
     otherwise uses Tavily web search (TAVILY_API_KEY) for real hotel names and links.
     """
@@ -137,18 +186,20 @@ def estimate_transport(origin: str, destination: str, dates: str) -> str:
             from src.tools.api_clients import amadeus_flight_offers
             options = amadeus_flight_offers(origin, destination, dates)
             if options:
+                options = _annotate_transport_options(origin, destination, dates, options)
                 return _to_str(EstimateTransportOutput(options=options))
         if os.environ.get("AVIATIONSTACK_ACCESS_KEY"):
             from src.tools.api_clients import aviationstack_routes
             options = aviationstack_routes(origin, destination, dates)
             if options:
+                options = _annotate_transport_options(origin, destination, dates, options)
                 return _to_str(EstimateTransportOutput(options=options))
-    out = EstimateTransportOutput(
-        options=[
-            TransportOption(mode="flight", price_min=1500000, price_max=2500000, duration_hours=1.5),
-            TransportOption(mode="train", price_min=800000, price_max=1200000, duration_hours=16),
-        ]
-    )
+    stub_opts = [
+        TransportOption(mode="flight", price_min=1500000, price_max=2500000, duration_hours=1.5),
+        TransportOption(mode="train", price_min=800000, price_max=1200000, duration_hours=16),
+    ]
+    stub_opts = _annotate_transport_options(origin, destination, dates, stub_opts)
+    out = EstimateTransportOutput(options=stub_opts)
     return _to_str(out)
 
 
@@ -248,16 +299,19 @@ def human_approval(action: str, payload: str) -> str:
 
 # --- Tool H: web_search (Tavily only) ---
 @function_tool
-def web_search(query: str, num_results: int = 5) -> str:
+def web_search(query: str, num_results: int = 5, search_depth: str = "basic") -> str:
     """
     Search the web via Tavily. Use for current info: hotels, weather, flight prices, reviews.
     Pass a clear search query (e.g. "hotels in Da Nang Vietnam", "flight Hanoi to Da Nang price").
+    search_depth: basic (nhanh) hoặc advanced (sâu hơn, tốn credit hơn).
     Returns a list of results with title, link, snippet. Requires: TAVILY_API_KEY in .env.
     """
     if not _use_real_api():
         return json.dumps({"results": [], "message": "Web search disabled (TRAVELOPS_USE_REAL_API=0)."})
     from src.tools.api_clients import web_search_results
-    results = web_search_results(query, num_results)
+
+    depth = search_depth if search_depth in ("basic", "advanced") else "basic"
+    results = web_search_results(query, num_results, search_depth=depth)
     if not results:
         return json.dumps({
             "results": [],

@@ -2,6 +2,10 @@
 Langfuse + OpenInference instrumentation for TravelOps.
 - Instrument OpenAI Agents so LLM/tool/handoff spans export to Langfuse via OTel.
 - Helpers for trace metadata (scenario_id, test_case_id, etc.) and custom span names.
+
+Chi tiết I/O (arguments tool, dump LLM input, tóm tắt response) — bật mặc định qua
+`TRAVELOPS_LANGFUSE_DETAIL_IO=1`: module `src/tracing/langfuse_detail.py` tạo observation
+`travelops.tool.*`, `travelops.llm.*`, `travelops.agent_end.*` trong cùng trace (khi có LANGFUSE_*).
 """
 import os
 from typing import Any

@@ -24,7 +24,14 @@ except ImportError:
     )
     sys.exit(1)
 
-from src.config import get_mode, get_model_for_mode
+from src.config import (
+    get_log_agent_io_verbose,
+    get_log_file_absolute,
+    get_log_max_chars,
+    log_file_uri,
+    get_mode,
+    get_model_for_mode,
+)
 from src.logging_config import setup_logging, get_logger, TravelOpsRunHooks
 from src.tracing.langfuse_setup import setup_tracing, get_trace_metadata
 from src.agents.orchestrator import create_orchestrator_agent
@@ -51,10 +58,17 @@ async def run_async(
     setup_logging()
     setup_tracing()
     log = get_logger()
+    log_abs = get_log_file_absolute()
+    if log_abs is not None:
+        log.info("log_file | path=%s | uri=%s", log_abs, log_file_uri(log_abs))
     mode = get_mode()
     model = get_model_for_mode(mode)
     log.info("run_start | mode=%s | model=%s | scenario_id=%s | test_case_id=%s", mode, model, scenario_id or "-", test_case_id or "-")
-    log.info("input | %s", user_input[:500] + "..." if len(user_input) > 500 else user_input)
+    _imax = get_log_max_chars()
+    log.info(
+        "input | %s",
+        user_input if len(user_input) <= _imax else user_input[:_imax] + "...",
+    )
 
     try:
         from agents.tracing import trace
@@ -96,7 +110,12 @@ async def run_async(
 
     final = result.final_output or ""
     log.info("run_end | final_output_len=%s", len(final))
-    log.debug("final_output | %s", final[:1000] + "..." if len(final) > 1000 else final)
+    _fmax = get_log_max_chars()
+    final_chunk = final if len(final) <= _fmax else final[:_fmax] + "..."
+    if get_log_agent_io_verbose():
+        log.info("final_output | %s", final_chunk)
+    else:
+        log.debug("final_output | %s", final_chunk)
     if return_result:
         return final, result
     return final
@@ -110,6 +129,12 @@ def main() -> None:
         run_async(user_input, scenario_id=scenario_id, test_case_id=test_case_id)
     )
     print(output)
+    log_path = get_log_file_absolute()
+    if log_path is not None:
+        print()
+        print("--- TravelOps log file ---")
+        print(f"Path: {log_path}")
+        print(f"Link: {log_file_uri(log_path)}")
 
 
 if __name__ == "__main__":

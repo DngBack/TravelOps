@@ -412,7 +412,34 @@ def _log_web_search_failure(reason: str, detail: str = "") -> None:
         pass
 
 
-def tavily_web_search(query: str, num_results: int = 5) -> list[dict[str, str]] | None:
+def deep_links_transport(origin: str, destination: str, dates: str) -> dict[str, list[str]]:
+    """
+    Link tra cứu / đặt vé tham khảo (Skyscanner, Google, nhà tàu…).
+    Không phải deep link đặt chỗ cố định — người dùng chọn ngày trên trang đích.
+    """
+    o = (_city_to_iata(origin) or "HAN").lower()
+    d = (_city_to_iata(destination) or "DAD").lower()
+    _ = _extract_first_date(dates)  # reserved for future dated URLs
+    flight = [
+        f"https://www.skyscanner.com.vn/transport/flights/{o}/{d}/",
+        f"https://www.google.com/search?q=Vietnam+Airlines+{o.upper()}+{d.upper()}+chuyến+bay",
+        f"https://www.google.com/search?q=VietJet+{o.upper()}+{d.upper()}",
+        "https://www.vietnamairlines.com/",
+        "https://www.vietjetair.com/vi/",
+    ]
+    train = [
+        "https://dsvn.vn/",
+        f"https://www.google.com/search?q=vé+tàu+{origin.split(',')[0]}+{destination.split(',')[0]}",
+    ]
+    bus = [
+        f"https://www.google.com/search?q=xe+khách+{origin.split(',')[0]}+{destination.split(',')[0]}",
+    ]
+    return {"flight": flight, "train": train, "bus": bus}
+
+
+def tavily_web_search(
+    query: str, num_results: int = 5, *, search_depth: str = "basic"
+) -> list[dict[str, str]] | None:
     """
     Web search via Tavily API. Requires TAVILY_API_KEY.
     Returns list of {title, link, snippet}. Used by web_search tool and search_hotels fallback.
@@ -425,7 +452,8 @@ def tavily_web_search(query: str, num_results: int = 5) -> list[dict[str, str]] 
         from tavily import TavilyClient
         client = TavilyClient(api_key=api_key)
         n = min(max(1, num_results), 20)
-        response = client.search(query=query, max_results=n, search_depth="basic")
+        depth = search_depth if search_depth in ("basic", "advanced") else "basic"
+        response = client.search(query=query, max_results=n, search_depth=depth)
         raw = response.get("results") or []
         out: list[dict[str, str]] = []
         for r in raw:
@@ -442,8 +470,11 @@ def tavily_web_search(query: str, num_results: int = 5) -> list[dict[str, str]] 
         return None
 
 
-def web_search_results(query: str, num_results: int = 5) -> list[dict[str, str]] | None:
+def web_search_results(
+    query: str, num_results: int = 5, *, search_depth: str = "basic"
+) -> list[dict[str, str]] | None:
     """
     Web search: Tavily only. Requires TAVILY_API_KEY. Returns list of {title, link, snippet} or None.
+    search_depth: basic | advanced (advanced tốn credit hơn, kết quả thường sâu hơn).
     """
-    return tavily_web_search(query, num_results)
+    return tavily_web_search(query, num_results, search_depth=search_depth)
